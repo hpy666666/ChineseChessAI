@@ -93,6 +93,38 @@ class ChessNet(nn.Module):
 
         return move_probs, value.item()
 
+    def predict_batch(self, boards_and_players_and_moves):
+        """
+        批量预测多个棋盘状态 (性能优化: 提升GPU利用率)
+        boards_and_players_and_moves: [(board, current_player, legal_moves), ...]
+        返回: [(move_probs, value), ...]
+        """
+        if len(boards_and_players_and_moves) == 0:
+            return []
+
+        # 编码所有棋盘
+        states = []
+        for board, current_player, _ in boards_and_players_and_moves:
+            state = self.encode_board(board, current_player)
+            states.append(state)
+
+        # 批量推理
+        states_tensor = torch.FloatTensor(np.array(states)).to(DEVICE)
+
+        with torch.no_grad():
+            policy_logits, values = self.forward(states_tensor)
+
+        # 转换为走法概率
+        results = []
+        for i, (_, _, legal_moves) in enumerate(boards_and_players_and_moves):
+            move_probs = self._logits_to_move_probs(
+                policy_logits[i].cpu().numpy(),
+                legal_moves
+            )
+            results.append((move_probs, values[i].item()))
+
+        return results
+
     def encode_board(self, board, current_player):
         """
         将棋盘编码为神经网络输入

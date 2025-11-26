@@ -77,28 +77,31 @@ class Trainer:
             print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
             # 1. 自我对弈收集数据
-            print(f"\n▶ 阶段1: 自我对弈 ({SELF_PLAY_GAMES}局)...")
+            print(f"\n>> 阶段1: 自我对弈 ({SELF_PLAY_GAMES}局)...")
             self.collect_self_play_data(SELF_PLAY_GAMES)
 
             # 2. 训练神经网络
             if len(self.replay_buffer) >= BATCH_SIZE:
-                print(f"\n▶ 阶段2: 训练神经网络...")
+                print(f"\n>> 阶段2: 训练神经网络...")
                 avg_loss = self.train_network()
                 print(f"   平均损失: {avg_loss:.4f}")
 
             # 3. 保存模型
             if iteration % SAVE_INTERVAL == 0:
-                print(f"\n▶ 阶段3: 保存模型...")
+                print(f"\n>> 阶段3: 保存模型...")
                 self.save_model()
                 print(f"   模型已保存到: {LATEST_MODEL}")
 
             # 4. 评估棋力
             if iteration % EVALUATE_INTERVAL == 0:
-                print(f"\n▶ 阶段4: 评估棋力...")
+                print(f"\n>> 阶段4: 评估棋力...")
                 self.evaluate()
 
             print(f"\n进度: 总对局数={self.total_games}, 缓冲区={len(self.replay_buffer)}")
             print("-" * 60)
+
+            # 记录训练进度到日志(每轮都记录)
+            self._log_progress(iteration)
 
     def collect_self_play_data(self, num_games):
         """收集自我对弈数据"""
@@ -107,15 +110,19 @@ class Trainer:
         red_wins = 0
         black_wins = 0
         draws = 0
+        total_moves = 0
 
         for i in range(num_games):
             # 前期用较高温度增加探索
             temperature = 1.0 if self.total_games < 500 else 0.5
 
+            print(f"   对弈 {i+1}/{num_games}...", end='', flush=True)
+
             game_data, winner = self_play_game(self.network, temperature=temperature)
 
             self.replay_buffer.push(game_data)
             self.total_games += 1
+            total_moves += len(game_data)
 
             if winner == 1:
                 red_wins += 1
@@ -124,13 +131,18 @@ class Trainer:
             else:
                 draws += 1
 
-            # 每10局显示一次进度
-            if (i + 1) % 10 == 0:
-                print(f"   进度: {i+1}/{num_games} 局 | "
-                      f"红胜:{red_wins} 黑胜:{black_wins} 和:{draws} | "
-                      f"平均步数: {len(game_data)}")
+            # 每局都显示结果
+            result = "红胜" if winner == 1 else "黑胜" if winner == -1 else "和局"
+            print(f" {result} ({len(game_data)}步)")
 
-        print(f"   ✓ 完成 {num_games} 局对弈")
+            # 每10局显示统计
+            if (i + 1) % 10 == 0:
+                avg_moves = total_moves / (i + 1)
+                print(f"   进度: {i+1}/{num_games} | "
+                      f"红胜:{red_wins} 黑胜:{black_wins} 和:{draws} | "
+                      f"平均步数: {avg_moves:.1f}")
+
+        print(f"   [完成] {num_games} 局对弈")
         print(f"   统计: 红方{red_wins}胜 黑方{black_wins}胜 {draws}和")
 
     def train_network(self):
@@ -196,11 +208,21 @@ class Trainer:
         print(f"   - 平均步数: {avg_moves:.1f}")
 
         # 保存评估结果到日志
+        os.makedirs(LOG_DIR, exist_ok=True)
         log_file = f"{LOG_DIR}/training.log"
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now()} | 总局数:{self.total_games} | "
                    f"红方胜率:{red_wins/test_games*100:.1f}% | "
-                   f"平均步数:{avg_moves:.1f}\n")
+                   f"平均步数:{avg_moves:.1f} | 类型:评估\n")
+
+    def _log_progress(self, iteration):
+        """记录训练进度(每轮都记录)"""
+        os.makedirs(LOG_DIR, exist_ok=True)
+        log_file = f"{LOG_DIR}/training.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now()} | 轮次:{iteration} | "
+                   f"总局数:{self.total_games} | "
+                   f"缓冲区:{len(self.replay_buffer)} | 类型:训练\n")
 
     def save_model(self):
         """保存模型"""

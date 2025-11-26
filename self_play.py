@@ -78,44 +78,61 @@ class MCTS:
 
     def search(self, env, num_simulations=MCTS_SIMULATIONS):
         """
-        执行MCTS搜索
+        执行MCTS搜索 (性能优化版: 使用批量神经网络推理)
         env: ChineseChess环境
         返回: {move: visit_count} 访问次数分布（用于训练）
         """
         root = MCTSNode()
 
-        # 执行多次模拟
-        for _ in range(num_simulations):
-            # 1. 选择：从根节点向下选择到叶子节点
-            node = root
-            search_env = self._copy_env(env)
+        # 批量大小: 每次收集多个叶子节点一起推理
+        batch_size = 8  # 可以根据GPU内存调整
 
-            while not node.is_leaf():
-                move, node = node.select_child()
-                search_env.make_move(move)
+        for batch_start in range(0, num_simulations, batch_size):
+            batch_end = min(batch_start + batch_size, num_simulations)
+            batch_count = batch_end - batch_start
 
-            # 2. 评估：使用神经网络评估叶子节点
-            board, current_player = search_env.get_state()
-            legal_moves = search_env.get_legal_moves()
+            # 收集批量的叶子节点
+            leaf_nodes = []
+            leaf_envs = []
+            leaf_data = []
 
-            # 检查游戏是否结束
-            if len(legal_moves) == 0 or search_env.winner is not None:
-                # 游戏结束
-                if search_env.winner == current_player:
-                    value = 1
-                elif search_env.winner == -current_player:
-                    value = -1
+            for _ in range(batch_count):
+                # 1. 选择：从根节点向下选择到叶子节点
+                node = root
+                search_env = self._copy_env(env)
+
+                while not node.is_leaf():
+                    move, node = node.select_child()
+                    search_env.make_move(move)
+
+                # 收集叶子节点
+                board, current_player = search_env.get_state()
+                legal_moves = search_env.get_legal_moves()
+
+                # 检查游戏是否结束
+                if len(legal_moves) == 0 or search_env.winner is not None:
+                    # 游戏结束，直接计算价值
+                    if search_env.winner == current_player:
+                        value = 1
+                    elif search_env.winner == -current_player:
+                        value = -1
+                    else:
+                        value = 0
+                    # 直接更新
+                    node.update(value)
                 else:
-                    value = 0
-            else:
-                # 使用神经网络评估
-                move_probs, value = self.network.predict(board, current_player, legal_moves)
+                    # 需要神经网络评估的节点
+                    leaf_nodes.append(node)
+                    leaf_envs.append((board, current_player, legal_moves))
 
-                # 3. 扩展：为叶子节点添加子节点
-                node.expand(move_probs)
+            # 2. 批量评估所有叶子节点
+            if len(leaf_nodes) > 0:
+                results = self.network.predict_batch(leaf_envs)
 
-            # 4. 回溯：更新路径上所有节点
-            node.update(value)
+                # 3. 扩展和回溯
+                for node, (move_probs, value) in zip(leaf_nodes, results):
+                    node.expand(move_probs)
+                    node.update(value)
 
         # 返回根节点的访问次数分布
         visit_counts = {move: child.visit_count
@@ -124,12 +141,24 @@ class MCTS:
         return visit_counts
 
     def _copy_env(self, env):
-        """复制环境（用于模拟）"""
+        """
+        复制环境（用于模拟）
+        性能优化: 只复制MCTS模拟必需的最小状态
+        """
         new_env = ChineseChess()
+        # 只复制棋盘（最耗时的操作）
         new_env.board = env.board.copy()
+        # 复制基本状态
         new_env.current_player = env.current_player
         new_env.move_count = env.move_count
         new_env.winner = env.winner
+        # 复制将帅位置缓存（避免重新查找）
+        new_env.red_king_pos = env.red_king_pos
+        new_env.black_king_pos = env.black_king_pos
+        # 复制无吃子计数（用于50回合判和）
+        new_env.no_capture_count = env.no_capture_count
+        # 不复制历史记录（MCTS模拟中的历史检测已经足够宽松，不需要）
+        # position_history, check_history, chase_history 保持空
         return new_env
 
 
@@ -196,17 +225,26 @@ def self_play_game(network, temperature=1.0, render=False):
     # 确定胜者
     winner = env.winner if env.winner else 0
 
-    # 为每个状态分配最终奖励
+    # 为每个状态分配奖励(改进版:结合即时奖励和最终结果)
     game_data_with_reward = []
-    for board, move_probs, player in game_data:
+    for i, (board, move_probs, player) in enumerate(game_data):
+        # 1. 最终奖励(输赢)
         if winner == 0:
-            reward = 0  # 和局
+            # 和局: 红方先手有优势,和局视为轻微失败
+            # 这样可以鼓励红方进攻,避免AI学会"无脑和棋"
+            if player == 1:  # 红方
+                final_reward = -0.1  # 轻微惩罚
+            else:  # 黑方
+                final_reward = 0.1   # 轻微奖励(守和成功)
         elif winner == player:
-            reward = 1  # 赢
+            final_reward = 1  # 赢
         else:
-            reward = -1  # 输
+            final_reward = -1  # 输
 
-        game_data_with_reward.append((board, move_probs, reward))
+        # 2. 即时奖励已经在make_move中计算过了
+        # 这里只使用最终奖励,因为即时奖励在MCTS中已经使用
+
+        game_data_with_reward.append((board, move_probs, final_reward))
 
     return game_data_with_reward, winner
 
