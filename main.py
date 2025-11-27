@@ -31,8 +31,8 @@ def train():
         trainer.train_loop(num_iterations=100)
     except KeyboardInterrupt:
         print("\n\n训练被用户中断")
-        trainer.save_model()
-        print("模型已保存")
+        # 模型在trainer.py中已经保存，这里不需要重复保存
+        print("训练已停止")
 
 def play():
     """人机对战模式"""
@@ -188,7 +188,13 @@ def evaluate():
     """快速评估模式"""
     print("\n启动快速评估...")
     import evaluate as eval_module
-    eval_module.main()
+    # 清理sys.argv，避免argparse解析错误
+    original_argv = sys.argv.copy()
+    sys.argv = [sys.argv[0]]  # 只保留脚本名
+    try:
+        eval_module.main()
+    finally:
+        sys.argv = original_argv  # 恢复原始参数
 
 
 def show_help():
@@ -287,4 +293,11 @@ def main():
         print("使用 'python main.py help' 查看帮助")
 
 if __name__ == "__main__":
+    import os
+    import multiprocessing
+
+    # 禁用Intel MKL的Ctrl+C处理（解决Windows多进程forrtl错误）
+    os.environ["FOR_DISABLE_CONSOLE_CTRL_HANDLER"] = "1"
+
+    multiprocessing.freeze_support()  # Windows多进程必需
     main()

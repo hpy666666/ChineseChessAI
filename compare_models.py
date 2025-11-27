@@ -210,9 +210,9 @@ def main():
 
     if not args.model2:
         print("错误: 需要指定第二个模型路径")
-        print("\n示例用法:")
-        print("  python compare_models.py --model2 models/model_1000.pt")
-        print("  python compare_models.py --model1 models/model_5000.pt --model2 models/model_10000.pt --games 20")
+        print("\n使用说明:")
+        print("  模型1默认使用 models/latest.pt (最新模型)")
+        print("  您需要用 --model2 指定第二个模型进行对比")
         print("\n可用的模型文件:")
 
         if os.path.exists(MODEL_DIR):
@@ -228,6 +228,18 @@ def main():
                         print(f"  - {model}")
             else:
                 print("  (暂无备份模型)")
+
+        print("\n示例命令:")
+        if models and len(models) >= 2:
+            # 找到最新和最旧的模型
+            latest = "latest.pt" if "latest.pt" in models else models[-1]
+            oldest = [m for m in models if m != latest][0] if len(models) > 1 else models[0]
+            print(f"  python compare_models.py --model2 models/{oldest}")
+            print(f"  python compare_models.py --model1 models/{latest} --model2 models/{oldest} --games 20")
+        else:
+            print("  python compare_models.py --model2 models/model_0.pt")
+            print("  python compare_models.py --model1 models/latest.pt --model2 models/model_0.pt --games 20")
+
         return
 
     compare_two_models(args.model1, args.model2, num_games=args.games)

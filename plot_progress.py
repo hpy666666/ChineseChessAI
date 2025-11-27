@@ -39,26 +39,27 @@ def parse_training_log(log_file):
     }
 
     with open(log_file, 'r', encoding='utf-8') as f:
-        content = f.read()
+        for line in f:
+            # 只解析训练类型的日志行
+            if '类型:训练' not in line:
+                continue
 
-    # 正则匹配训练轮次
-    rounds = re.findall(r'【第 (\d+)/\d+ 轮训练】', content)
-    data['rounds'] = [int(r) for r in rounds]
+            # 新格式: 2025-11-26 20:31:28.546135 | 轮次:1 | 总局数:134 | 红胜:50 黑胜:45 和:5 | 平均步数:42.5 | 缓冲区:9967 | 类型:训练
+            match = re.search(r'轮次:(\d+).*?总局数:(\d+).*?红胜:(\d+)\s+黑胜:(\d+)\s+和:(\d+).*?平均步数:([\d.]+)', line)
+            if match:
+                round_num = int(match.group(1))
+                total_games = int(match.group(2))
+                red_wins = int(match.group(3))
+                black_wins = int(match.group(4))
+                draws = int(match.group(5))
+                avg_moves = float(match.group(6))
 
-    # 匹配每轮的统计数据
-    # 例如: "红胜:50 黑胜:45 和:5 | 平均步数: 42"
-    stats = re.findall(r'红胜:(\d+)\s+黑胜:(\d+)\s+和:(\d+)\s+\|\s+平均步数:\s+(\d+)', content)
-
-    for red, black, draw, avg_moves in stats:
-        data['red_wins'].append(int(red))
-        data['black_wins'].append(int(black))
-        data['draws'].append(int(draw))
-        data['avg_moves'].append(int(avg_moves))
-
-    # 计算累计对局数
-    if data['rounds']:
-        games_per_round = data['red_wins'][0] + data['black_wins'][0] + data['draws'][0]
-        data['total_games'] = [r * games_per_round for r in data['rounds']]
+                data['rounds'].append(round_num)
+                data['total_games'].append(total_games)
+                data['red_wins'].append(red_wins)
+                data['black_wins'].append(black_wins)
+                data['draws'].append(draws)
+                data['avg_moves'].append(avg_moves)
 
     return data
 
@@ -78,9 +79,9 @@ def plot_progress(data):
     # 1. 胜率变化
     ax1 = axes[0, 0]
     total_games = [r + b + d for r, b, d in zip(data['red_wins'], data['black_wins'], data['draws'])]
-    red_rate = [r / t * 100 for r, t in zip(data['red_wins'], total_games)]
-    black_rate = [b / t * 100 for b, t in zip(data['black_wins'], total_games)]
-    draw_rate = [d / t * 100 for d, t in zip(data['draws'], total_games)]
+    red_rate = [r / t * 100 if t > 0 else 0 for r, t in zip(data['red_wins'], total_games)]
+    black_rate = [b / t * 100 if t > 0 else 0 for b, t in zip(data['black_wins'], total_games)]
+    draw_rate = [d / t * 100 if t > 0 else 0 for d, t in zip(data['draws'], total_games)]
 
     ax1.plot(data['rounds'], red_rate, 'r-o', label='红方胜率', linewidth=2)
     ax1.plot(data['rounds'], black_rate, 'b-s', label='黑方胜率', linewidth=2)
@@ -149,7 +150,7 @@ def print_statistics(data):
         print(f"\n平均步数:")
         print(f"  初始: {data['avg_moves'][0]} 步")
         print(f"  当前: {data['avg_moves'][-1]} 步")
-        print(f"  变化: {data['avg_moves'][-1] - data['avg_moves'][0]:+d} 步")
+        print(f"  变化: {data['avg_moves'][-1] - data['avg_moves'][0]:+.1f} 步")
 
     if data['red_wins']:
         total = data['red_wins'][-1] + data['black_wins'][-1] + data['draws'][-1]

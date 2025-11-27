@@ -10,7 +10,7 @@ from neural_network import ChessNet
 from self_play import self_play_game
 from config import DEVICE, LATEST_MODEL
 
-def evaluate_model(model_path=LATEST_MODEL, num_games=20, verbose=True):
+def evaluate_model(model_path=LATEST_MODEL, num_games=10, verbose=True):
     """
     评估模型实力
 
@@ -93,7 +93,7 @@ def evaluate_model(model_path=LATEST_MODEL, num_games=20, verbose=True):
     draw_rate = draws / num_games * 100
 
     # 实力等级评估
-    skill_level = estimate_skill_level(total_games_trained, avg_moves, draw_rate, red_rate)
+    skill_level = estimate_skill_level(total_games_trained, avg_moves, draw_rate, red_rate, black_rate)
 
     if verbose:
         print("-" * 60)
@@ -130,7 +130,7 @@ def evaluate_model(model_path=LATEST_MODEL, num_games=20, verbose=True):
     return result
 
 
-def estimate_skill_level(games_trained, avg_moves, draw_rate, red_rate):
+def estimate_skill_level(games_trained, avg_moves, draw_rate, red_rate, black_rate=0):
     """
     根据训练局数和表现估算实力等级
 
@@ -213,8 +213,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='快速评估象棋AI模型')
-    parser.add_argument('--games', type=int, default=20,
-                      help='评估对局数 (默认: 20)')
+    parser.add_argument('--games', type=int, default=10,
+                      help='评估对局数 (默认: 10)')
     parser.add_argument('--model', type=str, default=LATEST_MODEL,
                       help='模型文件路径')
 

@@ -7,6 +7,14 @@ import math
 from chess_env import ChineseChess
 from config import MCTS_SIMULATIONS, MAX_MOVES
 
+
+class InterruptedWithResults(Exception):
+    """自定义异常：中断时携带已完成的结果"""
+    def __init__(self, results):
+        self.results = results
+        super().__init__("Training interrupted by user")
+
+
 class MCTSNode:
     """蒙特卡洛树的节点"""
     def __init__(self, parent=None, move=None, prior_prob=0):
@@ -73,15 +81,19 @@ class MCTSNode:
 
 class MCTS:
     """蒙特卡洛树搜索"""
-    def __init__(self, network):
+    def __init__(self, network, num_simulations=None):
         self.network = network
+        self.default_simulations = num_simulations if num_simulations else MCTS_SIMULATIONS
 
-    def search(self, env, num_simulations=MCTS_SIMULATIONS):
+    def search(self, env, num_simulations=None):
         """
         执行MCTS搜索 (性能优化版: 使用批量神经网络推理)
         env: ChineseChess环境
         返回: {move: visit_count} 访问次数分布（用于训练）
         """
+        if num_simulations is None:
+            num_simulations = self.default_simulations
+
         root = MCTSNode()
 
         # 批量大小: 每次收集多个叶子节点一起推理
@@ -162,15 +174,16 @@ class MCTS:
         return new_env
 
 
-def self_play_game(network, temperature=1.0, render=False):
+def self_play_game(network, temperature=1.0, render=False, num_simulations=None):
     """
     进行一局自我对弈
     network: 神经网络
     temperature: 温度参数（控制随机性，越高越随机）
+    num_simulations: MCTS模拟次数（如果为None则使用默认值）
     返回: [(state, move_probs, current_player), ...], winner
     """
     env = ChineseChess()
-    mcts = MCTS(network)
+    mcts = MCTS(network, num_simulations=num_simulations)
 
     game_data = []  # 存储 (棋盘状态, MCTS走法分布, 当前玩家)
 
@@ -247,6 +260,144 @@ def self_play_game(network, temperature=1.0, render=False):
         game_data_with_reward.append((board, move_probs, final_reward))
 
     return game_data_with_reward, winner
+
+
+def _play_game_worker(args):
+    """
+    多进程工作函数（需要在顶层定义以便pickle）
+    args: (network_state_dict, temperature, num_simulations, game_id)
+    """
+    import signal
+    import os
+
+    # 禁用Intel MKL的Ctrl+C处理（解决Windows多进程forrtl错误）
+    os.environ["FOR_DISABLE_CONSOLE_CTRL_HANDLER"] = "1"
+
+    # 子进程忽略SIGINT，让主进程处理
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    from neural_network import ChessNet
+    from config import DEVICE
+    import torch
+
+    network_state_dict, temperature, num_simulations, game_id = args
+
+    try:
+        # 在子进程中重新创建网络
+        network = ChessNet().to(DEVICE)
+        network.load_state_dict(network_state_dict)
+        network.eval()
+
+        # 执行对弈
+        game_data, winner = self_play_game(network, temperature, render=False, num_simulations=num_simulations)
+
+        return game_data, winner
+
+    except KeyboardInterrupt:
+        # 子进程收到中断，直接退出
+        return None, None
+    except Exception as e:
+        # 发生错误，返回None
+        print(f"警告: 对局{game_id}失败: {e}")
+        return None, None
+
+
+def parallel_self_play(network, num_games, temperature=1.0, num_simulations=None, num_workers=4):
+    """
+    并行自我对弈
+    network: 神经网络
+    num_games: 对弈局数
+    temperature: 温度参数
+    num_simulations: MCTS模拟次数
+    num_workers: 并行进程数
+    返回: [(game_data, winner), ...]
+    """
+    import multiprocessing as mp
+    import torch
+    import signal
+    import sys
+
+    # 获取网络权重（用于在子进程中重建）
+    # 重要：将权重移到CPU，避免CUDA多进程共享问题
+    network_state_dict = {k: v.cpu() for k, v in network.state_dict().items()}
+
+    # 准备参数
+    args_list = [(network_state_dict, temperature, num_simulations, i)
+                 for i in range(num_games)]
+
+    # 使用进程池并行执行
+    results = []
+    pool = None
+
+    try:
+        # 创建进程池时忽略SIGINT（让主进程处理）
+        original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        pool = mp.Pool(processes=num_workers)
+        signal.signal(signal.SIGINT, original_sigint_handler)
+
+        # 使用imap_unordered实时获取结果
+        async_result = pool.imap_unordered(_play_game_worker, args_list)
+
+        # 实时进度显示
+        print(f"   进度: [{'':50}] 0/{num_games} (0.0%)", end='', flush=True)
+
+        for i, result in enumerate(async_result, 1):
+            # 检查结果是否有效（可能因中断返回None）
+            if result is not None and result[0] is not None:
+                results.append(result)
+
+            # 实时更新进度条
+            progress = i / num_games
+            bar_length = 50
+            filled = int(bar_length * progress)
+            bar = '=' * filled + ' ' * (bar_length - filled)
+            percent = progress * 100
+
+            # 计算有效率
+            valid_rate = len(results) / i * 100 if i > 0 else 0
+
+            print(f"\r   进度: [{bar}] {i}/{num_games} ({percent:.1f}%) | 有效:{len(results)} ({valid_rate:.0f}%)",
+                  end='', flush=True)
+
+        print()  # 换行
+
+        pool.close()
+        pool.join()
+
+    except KeyboardInterrupt:
+        print("\n\n⚠️  检测到Ctrl+C，正在终止所有子进程...", flush=True)
+        print("请稍候（最多10秒）...", flush=True)
+
+        if pool:
+            # 强制终止所有子进程
+            try:
+                pool.terminate()
+                pool.join(timeout=10)
+            except Exception:
+                pass  # 忽略终止过程中的错误
+
+        print("✓ 已停止对弈", flush=True)
+        print(f"提示: 已完成 {len(results)} 局对弈，数据将被保存", flush=True)
+
+        # 抛出自定义异常，携带已完成的结果
+        raise InterruptedWithResults(results)
+
+    except Exception as e:
+        print(f"\n发生错误: {e}")
+        if pool:
+            pool.terminate()
+            pool.join(timeout=5)
+        raise
+
+    finally:
+        # 确保进程池被关闭
+        if pool:
+            try:
+                pool.close()
+            except:
+                pass
+
+    return results
 
 
 def test_self_play():

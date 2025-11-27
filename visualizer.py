@@ -4,6 +4,7 @@
 """
 import pygame
 import sys
+import os
 from chess_env import ChineseChess
 from neural_network import ChessNet
 from self_play import MCTS
@@ -353,7 +354,10 @@ class GameVisualizer:
                     print(f"AI走棋: {best_move}")
 
             # 检查游戏是否结束
-            if env.move_count >= MAX_MOVES or len(env.get_legal_moves()) == 0:
+            # 注意：不在这里检查env.winner，因为while条件已经检查了
+            # 只检查最大步数限制（这会在下一次循环判断时触发和局）
+            if env.move_count >= MAX_MOVES:
+                env.winner = 0  # 100步限制，判和
                 break
 
         # 游戏结束

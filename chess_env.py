@@ -288,7 +288,7 @@ class ChineseChess:
             reward = 100  # 最高奖励!
             done = True
 
-        # 2. 吃子奖励(按价值分配)
+        # 2. 吃子奖励(按价值分配) - 增大奖励引导AI进攻
         elif captured != 0:
             piece_values = {
                 abs(PIECES['R_ROOK']): 9,    # 车
@@ -298,11 +298,11 @@ class ChineseChess:
                 abs(PIECES['R_ADVISOR']): 2,  # 士
                 abs(PIECES['R_PAWN']): 1      # 兵/卒
             }
-            reward = piece_values.get(abs(captured), 0) * 0.1  # 吃车=0.9分,吃兵=0.1分
+            reward = piece_values.get(abs(captured), 0) * 2.0  # 吃车=18分,吃兵=2分 (放大20倍)
 
-        # 3. 将军奖励
+        # 3. 将军奖励 - 大幅增加引导AI攻击对方将帅
         if not done and self._is_in_check(-self.current_player):
-            reward += 0.2  # 将军有额外奖励
+            reward += 3.0  # 将军高额奖励 (从0.2增到3.0)
 
         # 记录局面历史
         self.position_history.append(self._get_position_hash())
@@ -315,46 +315,52 @@ class ChineseChess:
         threats_after = self._get_threatened_pieces(self.current_player)
         self.chase_history.append(threats_after)
 
+        # 切换玩家（先切换，再检查对方是否被将死）
+        self.current_player *= -1
+        self.move_count += 1
+
         # 检查各种和棋/判负条件
         if not done:
-            # 1. 三次重复局面判和
-            if self._check_draw_by_repetition():
+            # 1. 将死判负(当前玩家被将死,对方获胜)
+            if self._check_checkmate():
+                done = True
+                reward = 100  # 最高奖励
+                self.winner = -self.current_player  # 对方获胜（因为已切换玩家）
+
+            # 2. 三次重复局面判和
+            elif self._check_draw_by_repetition():
                 done = True
                 reward = 0
                 self.winner = 0
 
-            # 2. 50回合无吃子判和
+            # 3. 50回合无吃子判和
             elif self._check_draw_by_fifty_moves():
                 done = True
                 reward = 0
                 self.winner = 0
 
-            # 3. 困毙判和
+            # 4. 困毙判负(无合法走法且未被将军,当前玩家输棋,对方获胜)
             elif self._check_stalemate():
                 done = True
-                reward = 0
-                self.winner = 0
+                reward = 100  # 对方获胜奖励
+                self.winner = -self.current_player  # 对方获胜
 
-            # 4. 长将判负(当前走棋方判负)
+            # 5. 长将判负(当前走棋方判负)
             elif self._check_perpetual_check():
                 done = True
                 reward = -10  # 违规重罚
                 self.winner = -self.current_player
 
-            # 5. 长捉判负(当前走棋方判负)
+            # 6. 长捉判负(当前走棋方判负)
             elif self._check_perpetual_chase():
                 done = True
                 reward = -10
                 self.winner = -self.current_player
 
-        # 切换玩家
-        self.current_player *= -1
-        self.move_count += 1
-
-        # 超过最大步数判和
-        if self.move_count >= 100:  # 使用config.MAX_MOVES会更好，但这里硬编码避免循环导入
+        # 超过最大步数判和（只在未分出胜负时）- 添加轻微惩罚引导尽快结束
+        if not done and self.move_count >= 70:  # 降低步数限制，引导AI尽快结束对局
             done = True
-            reward = 0
+            reward = -2  # 和局惩罚，鼓励进攻
             self.winner = 0
 
         return self.get_state(), reward, done
@@ -557,17 +563,37 @@ class ChineseChess:
         """
         return self.no_capture_count >= 100  # 双方各50回合=100步
 
+    def _check_checkmate(self):
+        """
+        检查是否将死(无合法走法且正被将军)
+        返回: True(将死)/False(不是)
+        """
+        # 检查是否有合法走法
+        legal_moves = self.get_legal_moves()
+        if len(legal_moves) > 0:
+            return False
+
+        # 无合法走法 + 被将军 = 将死
+        if self._is_in_check(self.current_player):
+            return True
+
+        return False
+
     def _check_stalemate(self):
         """
         检查是否困毙(无合法走法且未被将军)
         返回: True(困毙)/False(不是)
         """
-        if self._is_in_check(self.current_player):
-            return False  # 被将军不算困毙
-
         # 检查是否有合法走法
         legal_moves = self.get_legal_moves()
-        return len(legal_moves) == 0
+        if len(legal_moves) > 0:
+            return False
+
+        # 无合法走法 + 未被将军 = 困毙
+        if not self._is_in_check(self.current_player):
+            return True
+
+        return False
 
     def _check_perpetual_check(self):
         """

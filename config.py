@@ -6,8 +6,43 @@
 # ============ 训练参数 ============
 # 自我对弈参数
 SELF_PLAY_GAMES = 100           # 每轮训练前进行多少局自我对弈
-MAX_MOVES = 100                 # 每局最多走多少步（实际象棋平均50-70步，100步已足够）
+MAX_MOVES = 70                  # 每局最多走多少步（降低步数引导快速结束，后期可改回100）
 MCTS_SIMULATIONS = 50           # 每步思考模拟次数（越大越聪明但越慢，推荐50-200）
+
+# 动态MCTS模拟次数（根据训练进度自动调整）
+def get_dynamic_mcts_simulations(total_games):
+    """根据训练进度返回合适的MCTS模拟次数"""
+    if total_games < 1000:
+        return 15   # 初期：快速探索，降低计算量
+    elif total_games < 3000:
+        return 25   # 早期：开始增加思考深度
+    elif total_games < 8000:
+        return 35   # 中期：逐渐加强
+    elif total_games < 15000:
+        return 45   # 中后期：接近正常水平
+    else:
+        return 50   # 后期：完整思考
+
+# 动态学习率（根据训练进度自动调整）
+def get_dynamic_learning_rate(total_games):
+    """
+    根据训练进度返回合适的学习率
+
+    原理：
+    - 初期：高学习率快速学习基础知识
+    - 中期：降低学习率避免震荡
+    - 后期：低学习率精细调优
+    """
+    if total_games < 5000:
+        return 0.001   # 初期：快速学习
+    elif total_games < 15000:
+        return 0.0005  # 中期：稳定提升
+    else:
+        return 0.0002  # 后期：精细调优
+
+# 多进程配置
+NUM_WORKERS = 4                 # 并行对弈的进程数（建议=CPU核心数）
+USE_MULTIPROCESSING = True     # 是否使用多进程（True=4倍快但Ctrl+C较慢, False=稳定可随时退出）
 
 # 神经网络训练参数
 BATCH_SIZE = 64                 # 每次训练使用多少局数据
