@@ -11,17 +11,21 @@ MCTS_SIMULATIONS = 50           # 每步思考模拟次数（越大越聪明但�
 
 # 动态MCTS模拟次数（根据训练进度自动调整）
 def get_dynamic_mcts_simulations(total_games):
-    """根据训练进度返回合适的MCTS模拟次数"""
+    """
+    根据训练进度返回合适的MCTS模拟次数
+
+    【优化v4】平衡速度和效果，避免过度模拟
+    """
     if total_games < 1000:
-        return 15   # 初期：快速探索，降低计算量
+        return 30   # 初期：30次模拟，比旧版25次稍强
     elif total_games < 3000:
-        return 25   # 早期：开始增加思考深度
+        return 35   # 早期：35次模拟，平衡速度和质量
     elif total_games < 8000:
-        return 35   # 中期：逐渐加强
+        return 60   # 中期：60次模拟，能看到4-5步深度
     elif total_games < 15000:
-        return 45   # 中后期：接近正常水平
+        return 100  # 中后期：100次模拟，较强战术视野
     else:
-        return 50   # 后期：完整思考
+        return 150  # 后期：150次模拟，高质量决策
 
 # 动态学习率（根据训练进度自动调整）
 def get_dynamic_learning_rate(total_games):

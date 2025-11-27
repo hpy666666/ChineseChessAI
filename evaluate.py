@@ -58,17 +58,19 @@ def evaluate_model(model_path=LATEST_MODEL, num_games=10, verbose=True):
     draws = 0
     total_moves = 0
     move_counts = []
+    end_reasons = []  # 【新增】记录结束原因
 
     for i in range(num_games):
         if verbose:
             print(f"  对局 {i+1}/{num_games}...", end='', flush=True)
 
         # 使用低温度（0.1）让AI更确定性地走棋
-        game_data, winner = self_play_game(network, temperature=0.1, render=False)
+        game_data, winner, end_reason = self_play_game(network, temperature=0.1, render=False)
 
         moves = len(game_data)
         total_moves += moves
         move_counts.append(moves)
+        end_reasons.append(end_reason)  # 【新增】保存结束原因
 
         if winner == 1:
             red_wins += 1
@@ -81,7 +83,7 @@ def evaluate_model(model_path=LATEST_MODEL, num_games=10, verbose=True):
             result = "和局"
 
         if verbose:
-            print(f" {result} ({moves}步)")
+            print(f" {result} ({moves}步) - {end_reason}")
 
     # 统计分析
     avg_moves = total_moves / num_games

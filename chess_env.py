@@ -3,14 +3,15 @@
 包括：棋盘、走法生成、合法性检查、胜负判断
 """
 import numpy as np
+from typing import Tuple, List, Optional, Set
 from config import PIECES, BOARD_SIZE, BOARD_WIDTH
 
 class ChineseChess:
-    def __init__(self):
+    def __init__(self) -> None:
         """初始化棋盘"""
         self.reset()
 
-    def reset(self):
+    def reset(self) -> Tuple[np.ndarray, int]:
         """重置到初始局面"""
         # 创建10x9的棋盘，0表示空位
         self.board = np.zeros((BOARD_SIZE, BOARD_WIDTH), dtype=np.int8)
@@ -20,10 +21,14 @@ class ChineseChess:
         self.no_capture_count = 0   # 无吃子计数(用于50回合规则)
         self.check_history = []     # 将军历史(用于检测长将)
         self.chase_history = []     # 追捉历史(用于检测长捉)
+        self.consecutive_checks = 0  # 连续将军次数(用于防止刷分)
 
         # 性能优化: 缓存将帅位置，避免每次遍历棋盘查找
         self.red_king_pos = None
         self.black_king_pos = None
+
+        # 对局结束原因
+        self.end_reason = None
 
         # 初始化红方（下方，正数）
         # 车
@@ -57,17 +62,18 @@ class ChineseChess:
         self.current_player = 1  # 1=红方, -1=黑方
         self.move_count = 0
         self.winner = None
+        self.end_reason = None
 
         return self.get_state()
 
-    def get_state(self):
+    def get_state(self) -> Tuple[np.ndarray, int]:
         """
         获取当前状态（用于神经网络输入）
         返回: 10x9的棋盘 + 当前玩家
         """
         return self.board.copy(), self.current_player
 
-    def get_legal_moves(self):
+    def get_legal_moves(self) -> List[Tuple[int, int, int, int]]:
         """
         获取当前玩家所有合法走法
         返回: [(from_row, from_col, to_row, to_col), ...]
@@ -81,7 +87,7 @@ class ChineseChess:
                     moves.extend(self._get_piece_moves(r, c, piece))
         return moves
 
-    def _get_piece_moves(self, r, c, piece):
+    def _get_piece_moves(self, r: int, c: int, piece: int) -> List[Tuple[int, int, int, int]]:
         """获取指定棋子的所有可能走法"""
         piece_type = abs(piece)
         moves = []
@@ -114,7 +120,7 @@ class ChineseChess:
 
         return valid_moves
 
-    def _king_moves(self, r, c):
+    def _king_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """帅/将：九宫格内一步"""
         moves = []
         # 九宫格范围
@@ -131,7 +137,7 @@ class ChineseChess:
 
         return moves
 
-    def _advisor_moves(self, r, c):
+    def _advisor_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """士：九宫格内斜走"""
         moves = []
         if self.current_player == 1:
@@ -147,7 +153,7 @@ class ChineseChess:
 
         return moves
 
-    def _bishop_moves(self, r, c):
+    def _bishop_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """相/象：田字格，不过河"""
         moves = []
         river = 5 if self.current_player == 1 else 4
@@ -169,7 +175,7 @@ class ChineseChess:
 
         return moves
 
-    def _knight_moves(self, r, c):
+    def _knight_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """马：日字格，蹩马腿"""
         moves = []
         # 8个方向
@@ -190,7 +196,7 @@ class ChineseChess:
 
         return moves
 
-    def _rook_moves(self, r, c):
+    def _rook_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """车：直线走，不跳子"""
         moves = []
         # 四个方向
@@ -206,7 +212,7 @@ class ChineseChess:
 
         return moves
 
-    def _cannon_moves(self, r, c):
+    def _cannon_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """炮：直线走，隔子吃"""
         moves = []
         for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
@@ -228,7 +234,7 @@ class ChineseChess:
 
         return moves
 
-    def _pawn_moves(self, r, c):
+    def _pawn_moves(self, r: int, c: int) -> List[Tuple[int, int]]:
         """兵/卒：过河前只能前进，过河后可左右"""
         moves = []
         if self.current_player == 1:  # 红兵
@@ -244,7 +250,7 @@ class ChineseChess:
 
         return moves
 
-    def make_move(self, move):
+    def make_move(self, move: Tuple[int, int, int, int]) -> Tuple[Tuple[np.ndarray, int], float, bool]:
         """
         执行走法
         move: (from_row, from_col, to_row, to_col)
@@ -278,7 +284,7 @@ class ChineseChess:
         else:
             self.no_capture_count += 1
 
-        # 计算奖励(改进版:添加中间奖励)
+        # 计算奖励(改进版v2:添加更精细的中间奖励)
         reward = 0
         done = False
 
@@ -287,6 +293,8 @@ class ChineseChess:
             self.winner = self.current_player
             reward = 100  # 最高奖励!
             done = True
+            player_name = "红方" if self.current_player == 1 else "黑方"
+            self.end_reason = f"{player_name}吃掉对方将帅"
 
         # 2. 吃子奖励(按价值分配) - 增大奖励引导AI进攻
         elif captured != 0:
@@ -298,17 +306,38 @@ class ChineseChess:
                 abs(PIECES['R_ADVISOR']): 2,  # 士
                 abs(PIECES['R_PAWN']): 1      # 兵/卒
             }
-            reward = piece_values.get(abs(captured), 0) * 2.0  # 吃车=18分,吃兵=2分 (放大20倍)
+            base_value = piece_values.get(abs(captured), 0)
+            reward = base_value * 2.0  # 吃车=18分,吃兵=2分
 
-        # 3. 将军奖励 - 大幅增加引导AI攻击对方将帅
-        if not done and self._is_in_check(-self.current_player):
-            reward += 3.0  # 将军高额奖励 (从0.2增到3.0)
+            # 额外奖励：吃掉重要防御棋子（士、象）
+            if abs(captured) in [abs(PIECES['R_ADVISOR']), abs(PIECES['R_BISHOP'])]:
+                reward += 3.0  # 削弱对方防御
+
+        # 3. 将军奖励 - 大幅增加引导AI攻击对方将帅，但防止刷分
+        is_checking = self._is_in_check(-self.current_player)
+        if not done and is_checking:
+            # 实施递减奖励机制，防止重复将军刷分
+            if self.consecutive_checks == 0:
+                reward += 15.0  # 第一次将军，高额奖励
+            elif self.consecutive_checks == 1:
+                reward += 10.0  # 第二次将军，减少奖励
+            elif self.consecutive_checks == 2:
+                reward += 5.0   # 第三次将军，进一步减少
+            # 连续将军超过3次，不再给奖励（防止刷分）
+            self.consecutive_checks += 1
+        else:
+            # 如果这步没有将军，重置连续将军计数
+            self.consecutive_checks = 0
+
+            # 4. 位置价值奖励（仅在非将军、非吃子时给予小额奖励）
+            if captured == 0 and not done:
+                position_reward = self._evaluate_position_change(move)
+                reward += position_reward * 0.01  # 位置奖励很小，避免干扰主要目标
 
         # 记录局面历史
         self.position_history.append(self._get_position_hash())
 
-        # 记录是否将军
-        is_checking = self._is_in_check(-self.current_player)
+        # 记录是否将军 (已在上面计算过)
         self.check_history.append(is_checking)
 
         # 记录是否捉子
@@ -324,48 +353,59 @@ class ChineseChess:
             # 1. 将死判负(当前玩家被将死,对方获胜)
             if self._check_checkmate():
                 done = True
-                reward = 100  # 最高奖励
+                reward = 200  # 将死是最高成就，给予最高奖励
                 self.winner = -self.current_player  # 对方获胜（因为已切换玩家）
+                loser_name = "红方" if self.current_player == 1 else "黑方"
+                self.end_reason = f"将死{loser_name}"
 
             # 2. 三次重复局面判和
             elif self._check_draw_by_repetition():
                 done = True
                 reward = 0
                 self.winner = 0
+                self.end_reason = "三次重复局面判和"
 
             # 3. 50回合无吃子判和
             elif self._check_draw_by_fifty_moves():
                 done = True
                 reward = 0
                 self.winner = 0
+                self.end_reason = "50回合无吃子判和"
 
             # 4. 困毙判负(无合法走法且未被将军,当前玩家输棋,对方获胜)
             elif self._check_stalemate():
                 done = True
                 reward = 100  # 对方获胜奖励
                 self.winner = -self.current_player  # 对方获胜
+                loser_name = "红方" if self.current_player == 1 else "黑方"
+                self.end_reason = f"困毙{loser_name}"
 
             # 5. 长将判负(当前走棋方判负)
             elif self._check_perpetual_check():
                 done = True
                 reward = -10  # 违规重罚
                 self.winner = -self.current_player
+                loser_name = "红方" if self.current_player == 1 else "黑方"
+                self.end_reason = f"长将判负({loser_name})"
 
             # 6. 长捉判负(当前走棋方判负)
             elif self._check_perpetual_chase():
                 done = True
                 reward = -10
                 self.winner = -self.current_player
+                loser_name = "红方" if self.current_player == 1 else "黑方"
+                self.end_reason = f"长捉判负({loser_name})"
 
         # 超过最大步数判和（只在未分出胜负时）- 添加轻微惩罚引导尽快结束
         if not done and self.move_count >= 70:  # 降低步数限制，引导AI尽快结束对局
             done = True
             reward = -2  # 和局惩罚，鼓励进攻
             self.winner = 0
+            self.end_reason = f"超过{self.move_count}步判和"
 
         return self.get_state(), reward, done
 
-    def render(self):
+    def render(self) -> None:
         """
         文本显示棋盘（调试用）
         """
@@ -388,15 +428,27 @@ class ChineseChess:
         print(f"\n当前: {'红方' if self.current_player == 1 else '黑方'}")
         print(f"步数: {self.move_count}")
 
-    def _is_move_suicide(self, from_r, from_c, to_r, to_c):
+    def _is_move_suicide(self, from_r: int, from_c: int, to_r: int, to_c: int) -> bool:
         """
         检查走法是否会导致自己被将军(送将)
         返回: True(送将,非法) / False(安全,合法)
         """
-        # 模拟走法
+        # 备份棋盘和将帅位置缓存
         backup_board = self.board.copy()
-        self.board[to_r, to_c] = self.board[from_r, from_c]
+        backup_red_king = self.red_king_pos
+        backup_black_king = self.black_king_pos
+
+        # 模拟走法
+        moving_piece = self.board[from_r, from_c]
+        self.board[to_r, to_c] = moving_piece
         self.board[from_r, from_c] = 0
+
+        # 更新将帅位置缓存（如果移动的是将帅）
+        from config import PIECES
+        if moving_piece == PIECES['R_KING']:
+            self.red_king_pos = (to_r, to_c)
+        elif moving_piece == PIECES['B_KING']:
+            self.black_king_pos = (to_r, to_c)
 
         # 检查是否被将军
         in_check = self._is_in_check(self.current_player)
@@ -404,12 +456,14 @@ class ChineseChess:
         # 检查是否导致将帅对脸
         kings_face_to_face = self._are_kings_facing()
 
-        # 恢复棋盘
+        # 恢复棋盘和缓存
         self.board = backup_board
+        self.red_king_pos = backup_red_king
+        self.black_king_pos = backup_black_king
 
         return in_check or kings_face_to_face
 
-    def _are_kings_facing(self):
+    def _are_kings_facing(self) -> bool:
         """
         检查将帅是否对脸(同一竖线且中间无子)
         返回: True(对脸,非法) / False(不对脸或有遮挡,合法)
@@ -454,17 +508,11 @@ class ChineseChess:
         判断某方是否被将军
         player: 1(红方) 或 -1(黑方)
         返回: True/False
+
+        性能优化: 使用缓存的将帅位置，避免遍历棋盘
         """
-        # 找到该方的将/帅位置
-        king_piece = PIECES['R_KING'] if player == 1 else PIECES['B_KING']
-        king_pos = None
-        for r in range(BOARD_SIZE):
-            for c in range(BOARD_WIDTH):
-                if self.board[r, c] == king_piece:
-                    king_pos = (r, c)
-                    break
-            if king_pos:
-                break
+        # 使用缓存的将帅位置（性能优化）
+        king_pos = self.red_king_pos if player == 1 else self.black_king_pos
 
         if not king_pos:
             return False  # 没有将/帅(已被吃)
@@ -579,7 +627,7 @@ class ChineseChess:
 
         return False
 
-    def _check_stalemate(self):
+    def _check_stalemate(self) -> bool:
         """
         检查是否困毙(无合法走法且未被将军)
         返回: True(困毙)/False(不是)
@@ -595,7 +643,7 @@ class ChineseChess:
 
         return False
 
-    def _check_perpetual_check(self):
+    def _check_perpetual_check(self) -> bool:
         """
         检查是否长将(宽松版本:连续将军过多次)
         返回: True(判负)/False(不是)
@@ -613,7 +661,7 @@ class ChineseChess:
         # 如果12步中有10步以上在将军,判定为长将
         return check_count >= 10
 
-    def _check_perpetual_chase(self):
+    def _check_perpetual_chase(self) -> bool:
         """
         检查是否长捉(训练初期暂时禁用)
         返回: True(判负)/False(不是)
@@ -631,3 +679,90 @@ class ChineseChess:
         # recent_chases = self.chase_history[-16:]
         # chase_count = sum(1 for chase in recent_chases if len(chase) > 0)
         # return chase_count >= 15
+
+    def _evaluate_position_change(self, move: Tuple[int, int, int, int]) -> float:
+        """
+        评估走法带来的位置价值变化
+        返回: 位置评分变化 (-10 到 10)
+
+        考虑因素:
+        1. 棋子向前推进（进攻性）
+        2. 控制中心区域
+        3. 棋子活动性（控制更多格子）
+        """
+        from_r, from_c, to_r, to_c = move
+        piece = self.board[to_r, to_c]  # 走法后的位置
+        piece_type = abs(piece)
+
+        score = 0
+
+        # 1. 推进奖励：棋子向对方阵营移动
+        if self.current_player == 1:  # 红方向上推进
+            advance = from_r - to_r
+        else:  # 黑方向下推进
+            advance = to_r - from_r
+
+        if advance > 0:
+            # 不同棋子推进价值不同
+            if piece_type == abs(PIECES['R_PAWN']):
+                score += advance * 2.0  # 兵卒推进最重要
+            elif piece_type in [abs(PIECES['R_ROOK']), abs(PIECES['R_CANNON'])]:
+                score += advance * 1.5  # 车炮推进有价值
+            elif piece_type == abs(PIECES['R_KNIGHT']):
+                score += advance * 1.0  # 马推进有一定价值
+
+        # 2. 中心控制：占据中心位置更有价值
+        center_cols = [3, 4, 5]  # 中间三路
+        if to_c in center_cols:
+            score += 1.5
+            if 3 <= to_r <= 6:  # 中心区域
+                score += 1.0
+
+        # 3. 兵过河奖励
+        if piece_type == abs(PIECES['R_PAWN']):
+            if self.current_player == 1 and to_r < 5:  # 红兵过河
+                score += 3.0
+            elif self.current_player == -1 and to_r >= 5:  # 黑卒过河
+                score += 3.0
+
+        # 4. 靠近对方将帅（进攻性）
+        opponent_king_pos = self.black_king_pos if self.current_player == 1 else self.red_king_pos
+        if opponent_king_pos:
+            # 计算曼哈顿距离
+            old_dist = abs(from_r - opponent_king_pos[0]) + abs(from_c - opponent_king_pos[1])
+            new_dist = abs(to_r - opponent_king_pos[0]) + abs(to_c - opponent_king_pos[1])
+            if new_dist < old_dist:
+                score += (old_dist - new_dist) * 0.5  # 靠近对方将帅有奖励
+
+        return score
+
+    def _get_material_advantage(self) -> float:
+        """
+        计算材料优势（双方棋子价值差）
+        返回: 当前玩家的材料优势 (-50 到 50)
+        """
+        piece_values = {
+            abs(PIECES['R_ROOK']): 9,
+            abs(PIECES['R_CANNON']): 4.5,
+            abs(PIECES['R_KNIGHT']): 4,
+            abs(PIECES['R_BISHOP']): 2,
+            abs(PIECES['R_ADVISOR']): 2,
+            abs(PIECES['R_PAWN']): 1
+        }
+
+        red_value = 0
+        black_value = 0
+
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_WIDTH):
+                piece = self.board[r, c]
+                if piece > 0:  # 红方
+                    red_value += piece_values.get(abs(piece), 0)
+                elif piece < 0:  # 黑方
+                    black_value += piece_values.get(abs(piece), 0)
+
+        # 返回当前玩家的优势
+        if self.current_player == 1:
+            return red_value - black_value
+        else:
+            return black_value - red_value

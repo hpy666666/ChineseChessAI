@@ -369,7 +369,10 @@ class GameVisualizer:
         else:
             winner_text = "和局！"
 
+        # 添加结束原因
+        end_reason = env.end_reason if env.end_reason else "未知原因"
         print(f"\n对局结束: {winner_text}")
+        print(f"结束原因: {end_reason}")
 
         # 显示结果并等待
         self.draw_board()
@@ -481,7 +484,9 @@ class GameVisualizer:
             else:
                 winner_text = "和局"
 
-            print(f"对局结束: {winner_text}")
+            # 添加结束原因
+            end_reason = env.end_reason if env.end_reason else "未知原因"
+            print(f"对局结束: {winner_text} - {end_reason}")
 
             # 显示结果
             self.draw_game_state(env, winner_text)
